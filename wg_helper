@@ -11,27 +11,44 @@ set_global_variables() {
   INTERFACE_PRIVATEKEY_PATH="${CFG_DIR}/${INTERFACE}_privatekey"
   INTERFACE_PRIVATEKEY=$([ -f $INTERFACE_PRIVATEKEY_PATH ] && cat ${INTERFACE_PRIVATEKEY_PATH})
   INTERFACE_PUBLICKEY=$([ -f $INTERFACE_PRIVATEKEY_PATH ] && wg pubkey < ${INTERFACE_PRIVATEKEY_PATH})
-  INTERFACE_ADDRESS=${INTERFACE_ADDRESS:-192.168.99.1/32}
-  local temp=$([ -f ${INTERFACE_PATH} ] && sed -ne "s/^# interface_endpoint: //p" ${INTERFACE_PATH} || echo "$(hostname -I | cut -d ' ' -f1 ):${INTERFACE_PORT}")
-  INTERFACE_ENDPOINT=${INTERFACE_ENDPOINT:-$temp}
+  INTERFACE_ADDRESS=${INTERFACE_ADDRESS:-192.168.99.1/24}
+  INTERFACE_ENDPOINT=${INTERFACE_ENDPOINT:-`[ -f ${INTERFACE_PATH} ] && sed -ne "s/^# interface_endpoint: //p" ${INTERFACE_PATH}`}
   PEER=${PEER:-}
+  if [ -f $INTERFACE_PATH ]; then
+    sed -ne '/^# peer: '${PEER}'$/,/^$/ {q1}' $INTERFACE_PATH
+    PEER_EXIST=$?
+    sed -ne '/^# peer: '${PEER}'$/,/^$/ {/^$/b;/^#/!{q1}}' $INTERFACE_PATH
+    PEER_ENABLED=$?
+  fi
+  PEER_EXIST=${PEER_EXIST:-0}
+  PEER_ENABLED=${PEER_ENABLED:-0}
   PEER_DIR="${CFG_DIR}/${INTERFACE}_peers"
   PEER_PRIVATEKEY_PATH="${PEER_DIR}/${PEER}_privatekey"
   PEER_PRIVATEKEY=$([ -f ${PEER_PRIVATEKEY_PATH} ] && cat ${PEER_PRIVATEKEY_PATH})
   PEER_PUBLICKEY=$([ -f ${PEER_PRIVATEKEY_PATH} ] && wg pubkey < ${PEER_PRIVATEKEY_PATH})
-  PEER_ADDRESS=${PEER_ADDRESS:-`sed -ne "/^# peer: ${PEER}/,/^$/ {/^$/b;s/^# address: //p}" $INTERFACE_PATH`}
+  PEER_ADDRESS=${PEER_ADDRESS:-`[ -f ${INTERFACE_PATH} ] && sed -ne "/^# peer: ${PEER}$/,/^$/ {/^$/b;s/^# address: //p}" $INTERFACE_PATH`}
   PEER_ALLOWED_IPS=${PEER_ALLOWED_IPS:-${PEER_ADDRESS}}
   PEER_ENDPOINT=${PEER_ENDPOINT:-}
   PEER_KEEPALIVE=${PEER_KEEPALIVE:-}
-  PEER_CLIENT_ALLOWED_IPS=${PEER_CLIENT_ALLOWED_IPS:-0.0.0.0/0}
-  PEER_CLIENT_KEEPALIVE=${PEER_CLIENT_KEEPALIVE:-25}
+  PEER_CLIENT_ALLOWED_IPS=${PEER_CLIENT_ALLOWED_IPS:-10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16}
+  PEER_CLIENT_KEEPALIVE=${PEER_CLIENT_KEEPALIVE:-`[ -f ${INTERFACE_PATH} ] && sed -ne "/^# peer: ${PEER}$/,/^$/ {/^$/b;s/^# client\_keepalive: //p}" $INTERFACE_PATH`}
 }
+
+# TODO: Verify addresses and endpoints are valid
 
 create_interface_config() {
   if [ ! -f $INTERFACE_PRIVATEKEY_PATH ]; then
-    echo "Generating $interface private key..."
+    echo "Generating $INTERFACE private key..."
     wg genkey | ( umask 007; cat > $INTERFACE_PRIVATEKEY_PATH; )
 	set_global_variables
+  fi
+  if [ -z "${INTERFACE_ENDPOINT}" ]; then
+      local local_ip=$(hostname -I | cut -d ' ' -f1 ):${INTERFACE_PORT}
+      printf "What is the interface endpoint? [${local_ip}] "
+      read INTERFACE_ENDPOINT
+    if [ -z "${INTERFACE_ENDPOINT}" ]; then
+	  INTERFACE_ENDPOINT=$local_ip
+    fi
   fi
   echo "Generating config for $INTERFACE..."
   cat <<EOF > $INTERFACE_PATH
@@ -41,6 +58,17 @@ Address = $INTERFACE_ADDRESS
 ListenPort = $INTERFACE_PORT
 PrivateKey = $INTERFACE_PRIVATEKEY
 
+EOF
+}
+
+peer_params() {
+  cat <<EOF 
+# peer: $PEER
+# endpoint: $PEER_ENDPOINT
+# address: $PEER_ADDRESS
+# allowed_ips: $PEER_CLIENT_ALLOWED_IPS
+# keepalive: $PEER_KEEPALIVE
+# client_keepalive: $PEER_CLIENT_KEEPALIVE
 EOF
 }
 
@@ -55,32 +83,26 @@ add_peer() {
       read PEER
     done
   fi
-  if grep -Fxq "# peer: ${PEER}" $INTERFACE_PATH; then
+  set_global_variables
+  if [ $PEER_EXIST -eq 1 ]; then
     echo "ERROR: Duplicate entry."
     return 1
   fi
-  set_global_variables
   if [ ! -f $PEER_PRIVATEKEY_PATH ]; then
     wg genkey | install -Dm640 /dev/stdin $PEER_PRIVATEKEY_PATH
   fi
   PEER_ADDRESS=$(next_ip)
   set_global_variables
-  cat <<EOF >> $INTERFACE_PATH
-# peer: $PEER
-# endpoint: $PEER_ENDPOINT
-# address: $PEER_ADDRESS
-# allowed_ips: $PEER_CLIENT_ALLOWED_IPS
-
-EOF
+  peer_params >> $INTERFACE_PATH
+  echo "" >> $INTERFACE_PATH
+  set_global_variables
   set_peer_state true
 }
 
 remove_peer() {
-  local regex_check='/^# peer: '${PEER}'/,/^$/ {q1}'
-  local regex_remove='/^# peer: '${PEER}'/,/^$/ {d}'
+  local regex_remove='/^# peer: '${PEER}'$/,/^$/ {d}'
   local result
-  sed -ne "${regex_check}" $INTERFACE_PATH; result=$?
-  if [ $result -eq 1 ]; then
+  if [ $PEER_EXIST -eq 1 ]; then
     echo -e "WARNING: About to delete '${PEER}' peer and key.\n"
     printf "Would you like to continue? [y/N] "
     read result
@@ -91,7 +113,7 @@ remove_peer() {
     echo "Removing '${PEER}'..."
 	sed -i -e "${regex_remove}" $INTERFACE_PATH
     rm ${PEER_PRIVATEKEY_PATH}
-  elif [ $result -eq 0 ]; then
+  elif [ $PEER_EXIST -eq 0 ]; then
     echo "ERROR: Unable to locate '${PEER}' in config."
 	echo "No changes have been made."
 	exit 1
@@ -112,31 +134,40 @@ PrivateKey = $PEER_PRIVATEKEY
 PublicKey = $INTERFACE_PUBLICKEY
 Endpoint = $INTERFACE_ENDPOINT
 AllowedIPs = $PEER_CLIENT_ALLOWED_IPS
-PersistentKeepalive = $PEER_CLIENT_KEEPALIVE
 EOF
-
+  [ ! -z $PEER_CLIENT_KEEPALIVE ] && client+=$(echo -e "\nPersistentKeepalive = $PEER_CLIENT_KEEPALIVE")
   echo -e "$client" | qrencode -t ansiutf8
   echo -e "$client"
 }
 
 set_peer_state() {
-  local allowed_ips=$(sed -ne "/^# peer: ${PEER}/,/^$/ {/^$/b;s/^# allowed_ips: //p}" $INTERFACE_PATH)
-  local regex_enable='/^# peer: '${PEER}'/,/^$/!b;/^$/i [Peer]\nPublicKey = '${PEER_PUBLICKEY}'\nEndpoint = '${PEER_ENDPOINT}'\nAllowedIPs = '${PEER_ALLOWED_IPS}
-  local regex_disable='/^# peer: '${PEER}'/,/^$/ {/^$/b;/^#/!d;}'
-  local regex_check='/^# peer: '${PEER}'/,/^$/ {/^$/b;/^#/!{q1}}'
-  local result
-  sed -ne "${regex_check}" $INTERFACE_PATH; result=$?
+  local regex_enable='/^# peer: '${PEER}'$/,/^$/ {d}'
+  local regex_disable='/^# peer: '${PEER}'$/,/^$/ {/^$/b;/^#/!d;}'
+  if [ $PEER_EXIST -eq 0 ]; then
+    echo "ERROR: Peer does not exist"
+	exit 1
+  fi
   if [ true == $1 ]; then
     echo "Enabling peer ${peer}..."
-    if [ $result -eq 1 ]; then
+    if [ $PEER_ENABLED -eq 1 ]; then
       echo "ERROR: Peer is already enabled."
       return 1
     fi
     sed -i -e "${regex_enable}" $INTERFACE_PATH
+    peer_params >> $INTERFACE_PATH
+    cat <<EOF >> $INTERFACE_PATH
+[Peer]
+PublicKey = $PEER_PUBLICKEY
+AllowedIPs = $PEER_ADDRESS
+EOF
+	
+    [ ! -z $PEER_ENDPOINT ] && echo "Endpoint = ${PEER_ENDPOINT}" >> $INTERFACE_PATH
+    [ ! -z $PEER_KEEPALIVE ] && echo "PersistentKeepalive = ${PEER_KEEPALIVE}" >> $INTERFACE_PATH
+	echo >> $INTERFACE_PATH
 	show_peer_conf
   elif [ false == $1 ]; then
     echo "Disabling peer ${peer}..."
-    if [ $result -eq 0 ]; then
+    if [ $PEER_ENABLED -eq 0 ]; then
       echo "ERROR: Peer is already disabled."
 	  return 1
     fi
@@ -184,6 +215,10 @@ cmd_clean() {
 }
 
 cmd_init() {
+  create_interface_config
+}
+
+cmd_init-quick() {
   create_interface_config
   add_peer
 }
@@ -238,6 +273,20 @@ cmd_showconf() {
   esac
 }
 
+check_dependency() {
+  local depends=( "sudo" "wg" "wg-quick" "sed" "diff" "sort" "seq" )
+  local result
+  for i in ${depends[@]}; do
+    which $i 1> /dev/null
+	result=$?
+	if [ $result -eq 1 ]; then
+	  echo "ERROR: Missing one of the following dependencies."
+	  echo ${depends[*]}
+	  exit
+	fi
+  done
+}
+
 process_parameters() {
   if [[ ! -z $@ ]]; then
     while [ $# -gt 0 ]; do
@@ -251,7 +300,7 @@ process_parameters() {
           shift; shift
           ;;
         --interface-address)
-          WG_ADDRESS=$2
+          INTERFACE_ADDRESS=$2
           shift; shift
           ;;
         -p|--peer)
@@ -264,6 +313,14 @@ process_parameters() {
           ;;
         --peer-address)
           PEER_ADDRESS=$2
+          shift; shift
+          ;;
+        --peer-keepalive)
+          PEER_KEEPALIVE=$2
+          shift; shift
+          ;;
+        --peer-client-keepalive)
+          PEER_CLIENT_KEEPALIVE=$2
           shift; shift
           ;;
         -a|--allowed-ips)
@@ -287,7 +344,7 @@ process_command() {
   fi
   CMD=$1
   case $CMD in
-    init|clean|add|remove|enable|disable|showconf)
+    init|init-quick|clean|add|remove|enable|disable|showconf)
       ;;
     *)
       echo "ERROR: Invalid command"
@@ -305,6 +362,7 @@ USAGE: $(basename $0) COMMAND [OPTIONS]
     COMMAND
 	init	Creates/overwrites wireguard config. Existing private key will be 
 		used during creation.
+	init-quick	Same as init but will prompt for first peer.
 	clean	Delete Wireguard configs and keys including peer keys located in 
 		/etc/wireguard.
 	add	Add peer to a Wireguard interface.
@@ -322,6 +380,8 @@ USAGE: $(basename $0) COMMAND [OPTIONS]
 			by a colon.
 	--interface-address|--peer-address
 			Wireguard IP address for VPN connection.
+	--peer-keepalive|--peer-client-keepalive
+			Persistent keepalive
         -a|--allowed-ips
 			Comma seperate list of allowed ips written in CIDR notation.
 			(Default 0.0.0.0/0)
@@ -331,6 +391,7 @@ EOF
   fi
 }
 
+check_dependency
 # Check for root permissions
 if [[ $EUID -ne 0 ]]; then
   __SELF="$( cd "$(dirname "$0")" ; pwd -P )/$(basename "$(test -L "$0" && readlink "$0" || echo "$0")")"
@@ -339,7 +400,10 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 process_command $@
-if [ "showconf" == ${CMD} ]; then shift; CONF=$1; fi
+if [ "showconf" == ${CMD} ]; then
+  shift
+  CONF=$1
+fi
 shift
 process_parameters $@
 set_global_variables
