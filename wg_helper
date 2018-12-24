@@ -142,7 +142,13 @@ Endpoint = $INTERFACE_ENDPOINT
 AllowedIPs = $PEER_CLIENT_ALLOWED_IPS
 EOF
   [ ! -z $PEER_CLIENT_KEEPALIVE ] && client+=$(echo -e "\nPersistentKeepalive = $PEER_CLIENT_KEEPALIVE")
-  echo -e "$client" | qrencode -t ansiutf8
+  which qrencode 1> /dev/null
+  local result=$?
+  if [ $result -eq 0 ]; then
+    echo -e "$client" | qrencode -t ansiutf8
+  else
+    echo -e "NOTICE: If you install 'qrencode' the client config can be shown as a QR code.\n"
+  fi
   echo -e "$client"
 }
 
@@ -263,6 +269,10 @@ cmd_showconf() {
   if [ -z $CONF ]; then
     CONF="interface"
   fi
+  if [ ! -f $INTERFACE_PATH ]; then
+    echo "ERROR: Config for interface '${INTERFACE}' does not exist in '${CFG_DIR}' directory."
+	exit 1
+  fi
   case $CONF in
     interface)
       cat $INTERFACE_PATH
@@ -282,7 +292,7 @@ cmd_showconf() {
 }
 
 check_dependency() {
-  local depends=( "sudo" "wg" "wg-quick" "sed" "diff" "sort" "seq" "qrencode" )
+  local depends=( "sudo" "wg" "wg-quick" "sed" "diff" "sort" "seq" )
   local result
   for i in ${depends[@]}; do
     which $i 1> /dev/null
@@ -415,7 +425,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 process_command $@
-if [ "showconf" == ${CMD} ] && [ "-" != ${2:1:1} ]; then
+if [ "showconf" == ${CMD} ] && [ "-" != ${2:0:1} ]; then
   shift
   CONF=$1
 fi
