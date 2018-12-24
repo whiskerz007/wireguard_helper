@@ -386,7 +386,7 @@ USAGE: $(basename $0) COMMAND [OPTIONS]
 			Persistent keepalive
         -a|--allowed-ips
 			Comma seperate list of allowed ips written in CIDR notation.
-			(Default 0.0.0.0/0)
+			(Example 0.0.0.0/0)
 
 
 EOF
