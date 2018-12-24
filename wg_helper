@@ -27,7 +27,7 @@ set_global_variables() {
   PEER_PRIVATEKEY=$([ -f ${PEER_PRIVATEKEY_PATH} ] && cat ${PEER_PRIVATEKEY_PATH})
   PEER_PUBLICKEY=$([ -f ${PEER_PRIVATEKEY_PATH} ] && wg pubkey < ${PEER_PRIVATEKEY_PATH})
   PEER_ADDRESS=${PEER_ADDRESS:-`[ -f ${INTERFACE_PATH} ] && sed -ne "/^# peer: ${PEER}$/,/^$/ {/^$/b;s/^# address: //p}" $INTERFACE_PATH`}
-  PEER_ALLOWED_IPS=${PEER_ALLOWED_IPS:-${PEER_ADDRESS}}
+  PEER_ALLOWED_IPS=${PEER_ALLOWED_IPS:-`[ ! -z ${PEER_ADDRESS} ] && echo "${PEER_ADDRESS%??}32"`}
   PEER_ENDPOINT=${PEER_ENDPOINT:-}
   PEER_KEEPALIVE=${PEER_KEEPALIVE:-}
   PEER_CLIENT_ALLOWED_IPS=${PEER_CLIENT_ALLOWED_IPS:-10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16}
@@ -158,7 +158,7 @@ set_peer_state() {
     cat <<EOF >> $INTERFACE_PATH
 [Peer]
 PublicKey = $PEER_PUBLICKEY
-AllowedIPs = $PEER_ADDRESS
+AllowedIPs = $PEER_ALLOWED_IPS
 EOF
 	
     [ ! -z $PEER_ENDPOINT ] && echo "Endpoint = ${PEER_ENDPOINT}" >> $INTERFACE_PATH
@@ -203,6 +203,8 @@ next_ip() {
 cmd_clean() {
   local input
   echo "WARNING: About to delete Wireguard configs and all keys."
+  echo ""
+  echo "ALL DATA IN ${CFG_DIR} WILL BE DELETED!"
   echo ""
   printf "Would you like to continue? [y/N] "
   read input
