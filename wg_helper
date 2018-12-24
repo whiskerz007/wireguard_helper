@@ -415,7 +415,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 process_command $@
-if [ "showconf" == ${CMD} ]; then
+if [ "showconf" == ${CMD} ] && [ "-" != ${2:1:1} ]; then
   shift
   CONF=$1
 fi
