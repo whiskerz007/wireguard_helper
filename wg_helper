@@ -292,7 +292,7 @@ cmd_showconf() {
 }
 
 check_dependency() {
-  local depends=( "sudo" "wg" "wg-quick" "sed" "diff" "sort" "seq" )
+  local depends=( "sudo" "wg" "sed" "diff" "sort" "seq" )
   local result
   for i in ${depends[@]}; do
     which $i 1> /dev/null
