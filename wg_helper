@@ -357,8 +357,8 @@ process_command() {
 }
 
 usage() {
-  if [ -z $1 ] || [ "xhelp" == x$1 ]; then
-    cat <<EOF
+  set_global_variables
+  cat <<EOF
 USAGE: $(basename $0) COMMAND [OPTIONS]
        $(basename $0) showconf [interface|peer] [OPTIONS]
     COMMAND
@@ -366,7 +366,7 @@ USAGE: $(basename $0) COMMAND [OPTIONS]
 		used during creation.
 	init-quick	Same as init but will prompt for first peer.
 	clean	Delete Wireguard configs and keys including peer keys located in 
-		/etc/wireguard.
+		${CFG_DIR}.
 	add	Add peer to a Wireguard interface.
 	remove	Remove peer from Wireguard interface. Config and keys will be removed.
 		This cannot be undone.
@@ -390,7 +390,6 @@ USAGE: $(basename $0) COMMAND [OPTIONS]
 
 
 EOF
-  fi
 }
 
 check_dependency
